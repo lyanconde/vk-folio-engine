@@ -1,0 +1,11 @@
+build/
+out/
+.vs/
+.vscode/
+.idea/
+*.spv
+*.exe
+*.obj
+*.pdb
+assets/bistro/
+Thumbs.db
