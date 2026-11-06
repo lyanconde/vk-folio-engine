@@ -56,6 +56,30 @@ class HelloTriangleApplication
 		// Initialize Vulkan library by creating an instance.
 		createInstance();
 		setupDebugMessenger();
+		pickPhysicalDevice();
+	}
+
+	void pickPhysicalDevice()
+	{
+		auto physicalDevices = instance.enumeratePhysicalDevices();
+
+		// Find the a suitable device
+		auto const devIter = std::ranges::find_if(
+			physicalDevices,
+			[&](const auto& candidate){
+				return isDeviceSuitable(candidate);
+			});
+		
+		if(devIter == physicalDevices.end()){
+			throw std::runtime_error("failed to find Vulkan supported GPU!");
+		}
+
+		physicalDevice = *devIter;
+		if(enableValidationLayers){
+			std::cout << "Selected GPU: " << std::endl;
+			auto deviceProperties = physicalDevice.getProperties();
+			std::cout << '\t' << deviceProperties.deviceName << std::endl;
+		}
 	}
 
 	void setupDebugMessenger()
@@ -194,6 +218,11 @@ class HelloTriangleApplication
 	vk::raii::Context context{};
 	vk::raii::Instance instance{nullptr};
 	vk::raii::DebugUtilsMessengerEXT debugMessenger{nullptr};
+	vk::raii::PhysicalDevice physicalDevice{nullptr};
+
+	std::vector<const char*> requiredDeviceExtensions{
+		vk::KHRSwapchainExtensionName
+	};
 
 	public:
 	// Helpers
@@ -225,6 +254,51 @@ class HelloTriangleApplication
 
 			return vk::False;
 		}
+
+	bool isDeviceSuitable(const vk::raii::PhysicalDevice& physicalDevice)
+	{
+		// Check if the Physical Device supports Vulkan 1.3 API version
+		bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+
+		// Check if any of the queue families support graphics operations
+		auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+		bool supportsGraphics = std::ranges::any_of(queueFamilies, [](const auto& queueFamily){
+			// queueFlags are bitmasks so test the graphics bit with a
+			// bitwise operator '&' instead of a comparator '=='.
+			// The '!!' operator forces the bitmask to return a boolean
+			return !!(queueFamily.queueFlags & vk::QueueFlagBits::eGraphics);
+		});
+
+		// Check if all required physicalDevice extensions are available
+		auto availableDeviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
+		bool supportsAllRequiredExtensions = 
+			std::ranges::all_of(
+				requiredDeviceExtensions,
+				[&availableDeviceExtensions](const auto& requiredExtension){
+					return std::ranges::any_of(
+						availableDeviceExtensions,
+						[&requiredExtension](const auto& availableExtension){
+							return strcmp(availableExtension.extensionName, requiredExtension) == 0;}
+					);
+				});
+		
+		// Check if Physical Device supports the required features 
+		// (shader draw parameters, dynamic rendering, and extended dynamic state)
+		auto features = physicalDevice.getFeatures2<
+				vk::PhysicalDeviceFeatures2,
+				vk::PhysicalDeviceVulkan11Features,
+				vk::PhysicalDeviceVulkan13Features,
+				vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+		
+				bool supportsRequiredFeatures = 
+					features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters &&
+					features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+					features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+
+		// Return 'true' if the Physical Device supports all the required 
+		// criteria
+		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+	}
 };
 
 int main()
