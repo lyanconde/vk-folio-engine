@@ -57,6 +57,54 @@ class HelloTriangleApplication
 		createInstance();
 		setupDebugMessenger();
 		pickPhysicalDevice();
+		createLogicalDevice();
+	}
+
+	void createLogicalDevice()
+	{
+		std::vector<vk::QueueFamilyProperties> queueFamilyProperties{physicalDevice.getQueueFamilyProperties()};
+		if(enableValidationLayers){
+			std::cout << "Queue Family: " << std::endl;
+			for(const auto& family : queueFamilyProperties){
+				std::cout << '\t' << vk::to_string(family.queueFlags) << std::endl;
+			}
+		}
+
+		auto graphicsQueueFamilyProperty = std::ranges::find_if(queueFamilyProperties,
+			[&](const auto& queueFamily){
+				return (queueFamily.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
+			});
+		
+		auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
+		float queuePriority = 0.5f;
+
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
+			.queueFamilyIndex = graphicsIndex,
+			.queueCount = 1,
+			.pQueuePriorities = &queuePriority
+		};
+
+		vk::StructureChain<
+			vk::PhysicalDeviceFeatures2,
+			vk::PhysicalDeviceVulkan11Features,
+			vk::PhysicalDeviceVulkan13Features,
+			vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+				{},
+				{.shaderDrawParameters = true},
+				{.dynamicRendering = true},
+				{.extendedDynamicState = true}
+			};
+		
+		vk::DeviceCreateInfo deviceCreateInfo{
+			.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+			.queueCreateInfoCount = 1,
+			.pQueueCreateInfos = &deviceQueueCreateInfo,
+			.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtensions.size()),
+			.ppEnabledExtensionNames = requiredDeviceExtensions.data()
+		};
+
+		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
 	}
 
 	void pickPhysicalDevice()
@@ -219,6 +267,8 @@ class HelloTriangleApplication
 	vk::raii::Instance instance{nullptr};
 	vk::raii::DebugUtilsMessengerEXT debugMessenger{nullptr};
 	vk::raii::PhysicalDevice physicalDevice{nullptr};
+	vk::raii::Device device{nullptr};
+	vk::raii::Queue graphicsQueue{nullptr};
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
