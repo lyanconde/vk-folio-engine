@@ -56,8 +56,19 @@ class HelloTriangleApplication
 		// Initialize Vulkan library by creating an instance.
 		createInstance();
 		setupDebugMessenger();
+		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
+	}
+
+	void createSurface()
+	{
+		VkSurfaceKHR _surface{};
+		if(glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0){
+			throw std::runtime_error("failed to create window surface!");
+		}
+
+		surface = vk::raii::SurfaceKHR(instance, _surface);
 	}
 
 	void createLogicalDevice()
@@ -70,16 +81,26 @@ class HelloTriangleApplication
 			}
 		}
 
-		auto graphicsQueueFamilyProperty = std::ranges::find_if(queueFamilyProperties,
-			[&](const auto& queueFamily){
-				return (queueFamily.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
-			});
-		
-		auto graphicsIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
+		// Get the first index into queueFamilyProperties which supports both graphics and present.
+		auto it = std::ranges::find_if(
+			queueFamilyProperties,
+			[&](const auto& property){
+				auto index = static_cast<uint32_t>(&property - queueFamilyProperties.data());
+				return (property.queueFlags & vk::QueueFlagBits::eGraphics) && 
+						physicalDevice.getSurfaceSupportKHR(index, *surface);
+			}
+		);
+
+		if(it == queueFamilyProperties.end()){
+			throw std::runtime_error("failed to find queue family that supports graphics and present!");
+		}
+
+		uint32_t queueIndex = static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), it));
+
 		float queuePriority = 0.5f;
 
 		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-			.queueFamilyIndex = graphicsIndex,
+			.queueFamilyIndex = queueIndex,
 			.queueCount = 1,
 			.pQueuePriorities = &queuePriority
 		};
@@ -104,7 +125,7 @@ class HelloTriangleApplication
 		};
 
 		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-		graphicsQueue = vk::raii::Queue(device, graphicsIndex, 0);
+		graphicsQueue = vk::raii::Queue(device, queueIndex, 0);
 	}
 
 	void pickPhysicalDevice()
@@ -269,6 +290,7 @@ class HelloTriangleApplication
 	vk::raii::PhysicalDevice physicalDevice{nullptr};
 	vk::raii::Device device{nullptr};
 	vk::raii::Queue graphicsQueue{nullptr};
+	vk::raii::SurfaceKHR surface{nullptr};
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
