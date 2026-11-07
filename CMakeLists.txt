@@ -99,6 +99,30 @@ endif()
 # Slang shader
 set (SHADER_TARGET ${TEMPLATE_NAME}Shader)
 set (SHADERS_DIR ${TEMPLATE_DIR}/shaders)
+
+# find all Slang source files
+file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.slang")
+
+set(SHADER_OUTPUTS "")
+foreach(SHADER_SOURCE IN LISTS SHADER_SOURCES)
+  get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME_WE)
+  set(SHADER_OUTPUT ${SHADERS_DIR}/${SHADER_NAME}.spv)
+
+  add_custom_command(
+    OUTPUT ${SHADER_OUTPUT}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
+    COMMAND ${SLANGC_EXECUTABLE} ${SHADER_SOURCE} -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -o ${SHADER_OUTPUT}
+    DEPENDS ${SHADER_SOURCE}
+    COMMENT "Compiling Slang shader ${SHADER_NAME}.slang"
+    VERBATIM
+  )
+  list(APPEND SHADER_OUTPUTS ${SHADER_OUTPUT})
+endforeach()
+
+add_custom_target(${SHADER_TARGET} DEPENDS ${SHADER_OUTPUTS})
+add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
+
+#[[
 set (SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang")
 set (ENTRY_POINTS -entry vertMain -entry fragMain)
 add_custom_command(OUTPUT ${SHADERS_DIR} COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR})
@@ -112,6 +136,8 @@ add_custom_command(
 )
 add_custom_target(${SHADER_TARGET} DEPENDS ${SHADERS_DIR}/slang.spv)
 add_dependencies(${TEMPLATE_NAME} ${SHADER_TARGET})
+]]
+
 
 # Assets
 set (ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/")
