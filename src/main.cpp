@@ -63,6 +63,27 @@ class HelloTriangleApplication
 		pickPhysicalDevice();
 		createLogicalDevice();
 		createSwapchain();
+		createImageViews();
+	}
+
+	void createImageViews()
+	{
+		assert(swapchainImageViews.empty());
+
+		vk::ImageViewCreateInfo imageViewCreateInfo{
+			.viewType = vk::ImageViewType::e2D,
+			.format = swapchainSurfaceFormat.format,
+			.subresourceRange = {
+				vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
+		};
+
+		swapchainImageViews.reserve(swapchainImages.size());
+
+		std::ranges::for_each(swapchainImages,
+			[&](auto& image){
+				imageViewCreateInfo.image = image;
+				swapchainImageViews.emplace_back(device, imageViewCreateInfo);
+			});
 	}
 
 	void createSwapchain()
@@ -333,6 +354,8 @@ class HelloTriangleApplication
 	std::vector<vk::Image> swapchainImages{};
 	vk::SurfaceFormatKHR swapchainSurfaceFormat{};
 	vk::Extent2D swapchainExtent{};
+
+	std::vector<vk::raii::ImageView> swapchainImageViews{};
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
