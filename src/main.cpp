@@ -12,6 +12,9 @@ import vulkan_hpp;
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <cstdint>
+#include <limits>
+
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
@@ -59,6 +62,39 @@ class HelloTriangleApplication
 		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
+		createSwapchain();
+	}
+
+	void createSwapchain()
+	{
+		vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+		swapchainExtent = chooseSwapchainExtent(surfaceCapabilities);
+		uint32_t minImageCount = chooseSwapchainMinImageCount(surfaceCapabilities);
+
+		std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(*surface);
+		swapchainSurfaceFormat = chooseSwapchainSurfaceFormat(availableFormats);
+
+		std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(*surface);
+		vk::PresentModeKHR presentMode = chooseSwapchainPresentMode(availablePresentModes);
+
+		vk::SwapchainCreateInfoKHR swapchainCreateInfo{
+			.surface = *surface,
+			.minImageCount = minImageCount,
+			.imageFormat = swapchainSurfaceFormat.format,
+			.imageColorSpace = swapchainSurfaceFormat.colorSpace,
+			.imageExtent = swapchainExtent,
+			.imageArrayLayers = 1,
+			.imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+			.imageSharingMode = vk::SharingMode::eExclusive,
+			.preTransform = surfaceCapabilities.currentTransform,
+			.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+			.presentMode = presentMode,
+			.clipped = true,
+			.oldSwapchain = nullptr
+		};
+
+		swapchain = vk::raii::SwapchainKHR(device, swapchainCreateInfo);
+		swapchainImages = swapchain.getImages();
 	}
 
 	void createSurface()
@@ -291,6 +327,12 @@ class HelloTriangleApplication
 	vk::raii::Device device{nullptr};
 	vk::raii::Queue graphicsQueue{nullptr};
 	vk::raii::SurfaceKHR surface{nullptr};
+	
+	// Present components
+	vk::raii::SwapchainKHR swapchain{nullptr};
+	std::vector<vk::Image> swapchainImages{};
+	vk::SurfaceFormatKHR swapchainSurfaceFormat{};
+	vk::Extent2D swapchainExtent{};
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
@@ -370,6 +412,65 @@ class HelloTriangleApplication
 		// Return 'true' if the Physical Device supports all the required 
 		// criteria
 		return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+	}
+
+	vk::SurfaceFormatKHR chooseSwapchainSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats )
+	{
+		assert(!availableFormats.empty());
+
+		const auto formatIt = std::ranges::find_if(
+			availableFormats,
+			[](const auto& format) {
+				 return format.format == vk::Format::eB8G8R8A8Srgb &&
+				 	format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+			});
+		
+		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
+	}
+
+	vk::PresentModeKHR chooseSwapchainPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes)
+	{
+		assert(std::ranges::any_of(availablePresentModes,
+			[](const auto& presentMode){
+				return presentMode == vk::PresentModeKHR::eFifo;
+			}));
+	
+		return std::ranges::any_of(availablePresentModes,
+		[](const auto& presentMode){
+			return vk::PresentModeKHR::eMailbox == presentMode;
+		}) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+	}
+
+	vk::Extent2D chooseSwapchainExtent(const vk::SurfaceCapabilitiesKHR& capabilities)
+	{
+		// currentExtent is only set to the special "undefined" value described above
+		// when the window manager lets us choose the extent ourselves; any other value
+		// means the surface already dictates a fixed extent that we must use as-is.
+		if(capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+		{
+			return capabilities.currentExtent;
+		}
+
+		int width{}, height{};
+		glfwGetFramebufferSize(window, &width, &height);
+
+		return {
+			std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+			std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
+		};
+
+
+	}
+
+	uint32_t chooseSwapchainMinImageCount(const vk::SurfaceCapabilitiesKHR& surfaceCapabilities)
+	{
+		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
+		if((0 < surfaceCapabilities.maxImageCount) && (surfaceCapabilities.maxImageCount < minImageCount))
+		{
+			minImageCount = surfaceCapabilities.maxImageCount;
+		}
+
+		return minImageCount;
 	}
 };
 
