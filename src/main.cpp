@@ -54,9 +54,11 @@ class HelloTriangleApplication
 		glfwInit();
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+		glfwSetWindowUserPointer(window, this);
+		glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 	}
 
 	void initVulkan()
@@ -566,6 +568,7 @@ class HelloTriangleApplication
 
 	void cleanup()
 	{
+		cleanupSwapchain();
 		glfwDestroyWindow(window);
 
 		glfwTerminate();
@@ -601,6 +604,10 @@ class HelloTriangleApplication
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores{};
 	std::vector<vk::raii::Fence> inFlightFences{};
 	uint32_t frameIndex = 0;
+
+	// Swapchain recreation
+	bool framebufferResized{false};
+
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
@@ -815,11 +822,24 @@ class HelloTriangleApplication
 		if(fenceResult != vk::Result::eSuccess){
 			throw std::runtime_error("failed to wait for fence!");
 		}
-
-		device.resetFences(*inFlightFences[frameIndex]);
 		// Acquire an image from the swapchain, signal the semaphore that 
 		// the image is safe to use.
 		auto [result, imageIndex] = swapchain.acquireNextImage(UINT64_MAX, *imageAcquiredSemaphores[frameIndex], nullptr);
+
+		if(result == vk::Result::eErrorOutOfDateKHR){
+			recreateSwapchain();
+			return;
+		}
+
+		if(result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR){
+			assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
+			throw std::runtime_error("failed to acquire swapchain image!");
+		}
+
+		// Delaying fence reset until the application is sure to submit a work
+		// to prevent a deadlock because of an early exit when a swapchain is
+		// recreated.
+		device.resetFences(*inFlightFences[frameIndex]);
 
 		// Record a command buffer which draws the scene into that image.
 		recordCommandBuffer(imageIndex);
@@ -848,8 +868,49 @@ class HelloTriangleApplication
 		};
 
 		result = graphicsQueue.presentKHR(presentInfoKHR);
+		if((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR)){
+			framebufferResized = false;
+			recreateSwapchain();
+		} else {
+			assert(result == vk::Result::eSuccess);
+		}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
+
+	void recreateSwapchain()
+	{
+		int width{0}, height{0};
+		glfwGetFramebufferSize(window, &width, &height);
+		while((width == 0 || height == 0) && !glfwWindowShouldClose(window)){
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		if(glfwWindowShouldClose(window)){
+			return;
+		}
+		
+		device.waitIdle();
+
+		cleanupSwapchain();
+
+		createSwapchain();
+		createImageViews();
+	}
+
+	void cleanupSwapchain()
+	{
+		swapchainImageViews.clear();
+		swapchain = nullptr;
+	}
+
+	static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+	{
+		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
+	}
+
+	
 };
 
 int main()
