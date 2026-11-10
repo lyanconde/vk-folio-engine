@@ -20,8 +20,7 @@ import vulkan_hpp;
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
-constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
-
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 constexpr bool print_debug = 1;
 
@@ -78,17 +77,24 @@ class HelloTriangleApplication
 
 	void createSyncObjects()
 	{
-		imageAcquiredSemaphores.reserve(swapchainImages.size());
+		assert(imageAcquiredSemaphores.empty() && renderFinishedSemaphores.empty() && inFlightFences.empty());
+
+		imageAcquiredSemaphores.reserve(MAX_FRAMES_IN_FLIGHT);
+		inFlightFences.reserve(MAX_FRAMES_IN_FLIGHT);
 		renderFinishedSemaphores.reserve(swapchainImages.size());
 		for(const auto& image : swapchainImages){
-			imageAcquiredSemaphores.emplace_back(vk::raii::Semaphore(device, vk::SemaphoreCreateInfo()));
 			renderFinishedSemaphores.emplace_back(vk::raii::Semaphore(device, vk::SemaphoreCreateInfo()));
 		}
-		drawFence = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
+			imageAcquiredSemaphores.emplace_back(vk::raii::Semaphore(device, vk::SemaphoreCreateInfo()));
+			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+		}
 	}
 
 	void recordCommandBuffer(uint32_t imageIndex)
 	{
+		auto& commandBuffer = commandBuffers[frameIndex];
 		commandBuffer.begin({});
 
 			transitionImageLayout(
@@ -98,7 +104,8 @@ class HelloTriangleApplication
 				{},
 				vk::AccessFlagBits2::eColorAttachmentWrite,
 				vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-				vk::PipelineStageFlagBits2::eColorAttachmentOutput
+				vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+				commandBuffer
 			);
 
 			vk::ClearValue clearColor  = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f);
@@ -136,7 +143,8 @@ class HelloTriangleApplication
 				vk::AccessFlagBits2::eColorAttachmentWrite,
 				{},
 				vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-				vk::PipelineStageFlagBits2::eBottomOfPipe
+				vk::PipelineStageFlagBits2::eBottomOfPipe,
+				commandBuffer
 			);
 
 		commandBuffer.end();
@@ -147,10 +155,10 @@ class HelloTriangleApplication
 		vk::CommandBufferAllocateInfo allocInfo {
 			.commandPool = commandPool,
 			.level = vk::CommandBufferLevel::ePrimary,
-			.commandBufferCount = 1
+			.commandBufferCount = MAX_FRAMES_IN_FLIGHT
 		};
 
-		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());
+		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 	}
 
 	void createCommandPool()
@@ -586,12 +594,12 @@ class HelloTriangleApplication
 	// Drawing components
 	uint32_t queueIndex{};
 	vk::raii::CommandPool commandPool{nullptr};
-	vk::raii::CommandBuffer commandBuffer{nullptr};
+	std::vector<vk::raii::CommandBuffer> commandBuffers{};
 
 	// Synchronization components
 	std::vector<vk::raii::Semaphore> imageAcquiredSemaphores{};
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores{};
-	vk::raii::Fence drawFence{nullptr};
+	std::vector<vk::raii::Fence> inFlightFences{};
 	uint32_t frameIndex = 0;
 
 	std::vector<const char*> requiredDeviceExtensions{
@@ -724,7 +732,7 @@ class HelloTriangleApplication
 
 	uint32_t chooseSwapchainMinImageCount(const vk::SurfaceCapabilitiesKHR& surfaceCapabilities)
 	{
-		auto minImageCount = std::max(MAX_FRAMES_IN_FLIGHT, surfaceCapabilities.minImageCount);
+		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
 		if((0 < surfaceCapabilities.maxImageCount) && (surfaceCapabilities.maxImageCount < minImageCount))
 		{
 			minImageCount = surfaceCapabilities.maxImageCount;
@@ -768,7 +776,8 @@ class HelloTriangleApplication
 		vk::AccessFlags2 srcAccessMask,
 		vk::AccessFlags2 dstAccessMask,
 		vk::PipelineStageFlags2 srcStageMask,
-		vk::PipelineStageFlags2 dstStageMask)
+		vk::PipelineStageFlags2 dstStageMask,
+		const vk::raii::CommandBuffer& commandBuffer)
 	{
 		vk::ImageMemoryBarrier2 barrier{
 			.srcStageMask = srcStageMask,
@@ -802,12 +811,12 @@ class HelloTriangleApplication
 		// At the start of the frame, we want to wait until the previous
 		// frame has finished, so that the command buffer and semaphores are 
 		// available to use.
-		auto fenceResult = device.waitForFences(*drawFence, vk::True, UINT64_MAX);
+		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
 		if(fenceResult != vk::Result::eSuccess){
 			throw std::runtime_error("failed to wait for fence!");
 		}
 
-		device.resetFences(*drawFence);
+		device.resetFences(*inFlightFences[frameIndex]);
 		// Acquire an image from the swapchain, signal the semaphore that 
 		// the image is safe to use.
 		auto [result, imageIndex] = swapchain.acquireNextImage(UINT64_MAX, *imageAcquiredSemaphores[frameIndex], nullptr);
@@ -822,26 +831,25 @@ class HelloTriangleApplication
 			.pWaitSemaphores = &*imageAcquiredSemaphores[frameIndex],
 			.pWaitDstStageMask = &waitDestinationStageMask,
 			.commandBufferCount = 1,
-			.pCommandBuffers = &*commandBuffer,
+			.pCommandBuffers = &*commandBuffers[frameIndex],
 			.signalSemaphoreCount = 1,
-			.pSignalSemaphores = &*renderFinishedSemaphores[frameIndex]
+			.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
 		};
 
-		graphicsQueue.submit(submitInfo, *drawFence);
+		graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);
 
 		// Present the swapchain image.
 		const vk::PresentInfoKHR presentInfoKHR{
 			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &*renderFinishedSemaphores[frameIndex],
+			.pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
 			.swapchainCount = 1,
 			.pSwapchains = &*swapchain,
 			.pImageIndices = &imageIndex
 		};
 
 		result = graphicsQueue.presentKHR(presentInfoKHR);
-		frameIndex = (frameIndex + 1) % static_cast<uint32_t>(swapchainImages.size());
+		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
-
 };
 
 int main()
