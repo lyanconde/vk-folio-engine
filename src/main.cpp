@@ -6,6 +6,8 @@ import vulkan_hpp;
 #endif
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -16,6 +18,7 @@ import vulkan_hpp;
 #include <limits>
 #include <fstream>
 #include <span>
+#include <array>
 
 
 const uint32_t WIDTH  = 800;
@@ -24,6 +27,38 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 constexpr bool print_debug = 1;
 
+struct Vertex{
+	glm::vec2 pos;
+	glm::vec3 color;
+
+	static vk::VertexInputBindingDescription getBindingDescription()
+	{
+		return {
+			.binding = 0,
+			.stride = sizeof(Vertex),
+			.inputRate = vk::VertexInputRate::eVertex
+		};
+	}
+
+	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescription()
+	{
+		return {
+			{{.location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, pos)},
+				{.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)}}
+			};
+	}
+};
+
+const std::vector<Vertex> vertices{
+	{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+	{{0.5f, -0.5f}, {0.0f, 0.0f, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 0.0f, 0.0f}},
+	{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+};
+
+const std::vector<uint16_t> indices = {
+	0, 1, 2, 2, 3, 0
+};
 
 const std::vector<char const*> validationLayers{
 	"VK_LAYER_KHRONOS_validation"	// Standard validation bundle
@@ -73,8 +108,48 @@ class HelloTriangleApplication
 		createImageViews();
 		createGraphicsPipeline();
 		createCommandPool();
+		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffer();
 		createSyncObjects();
+	}
+
+	void createIndexBuffer()
+	{
+		vk::DeviceSize bufferSize = std::span{indices}.size_bytes();
+
+		auto [stagingBuffer, stagingBufferMemory] = 
+			createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, 
+				vk::MemoryPropertyFlagBits::eHostVisible | 
+				vk::MemoryPropertyFlagBits::eHostCoherent);
+
+		void* stagingData = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(stagingData, indices.data(), bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		std::tie(indexBuffer, indexBufferMemory) = 
+				createBuffer(bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+					vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+	}
+
+	void createVertexBuffer()
+	{
+		vk::DeviceSize bufferSize = std::span{vertices}.size_bytes();
+
+		auto [stagingBuffer, stagingBufferMemory] = 
+			createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, 
+				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+		
+		void *stagingData = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(stagingData, vertices.data(), bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		std::tie(vertexBuffer, vertexBufferMemory) =
+				createBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+					vk::MemoryPropertyFlagBits::eDeviceLocal);
+		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 	}
 
 	void createSyncObjects()
@@ -132,9 +207,12 @@ class HelloTriangleApplication
 					0.0f, 0.0f, 
 					static_cast<float>(swapchainExtent.width), static_cast<float>(swapchainExtent.height), 
 					0.0f, 1.0f));
-
 				commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent));
-				commandBuffer.draw(3, 1, 0, 0);
+
+				commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+				commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
+				// commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+				commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 			
 			commandBuffer.endRendering();
 
@@ -204,7 +282,15 @@ class HelloTriangleApplication
 			.pDynamicStates = dynamicStates.data()
 		};
 
-		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+		auto bindingDescription = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescription();
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+			.vertexBindingDescriptionCount = 1,
+			.pVertexBindingDescriptions = &bindingDescription,
+			.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+			.pVertexAttributeDescriptions = attributeDescriptions.data()
+		};
+
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
 			.topology = vk::PrimitiveTopology::eTriangleList
 		};
@@ -608,6 +694,13 @@ class HelloTriangleApplication
 	// Swapchain recreation
 	bool framebufferResized{false};
 
+	// Vertex Buffers
+	vk::raii::Buffer vertexBuffer{nullptr};
+	vk::raii::DeviceMemory vertexBufferMemory{nullptr};
+	vk::raii::Buffer indexBuffer{nullptr};
+	vk::raii::DeviceMemory indexBufferMemory{nullptr};
+
+
 
 	std::vector<const char*> requiredDeviceExtensions{
 		vk::KHRSwapchainExtensionName
@@ -889,7 +982,7 @@ class HelloTriangleApplication
 		if(glfwWindowShouldClose(window)){
 			return;
 		}
-		
+
 		device.waitIdle();
 
 		cleanupSwapchain();
@@ -910,7 +1003,58 @@ class HelloTriangleApplication
 		app->framebufferResized = true;
 	}
 
-	
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
+	{
+		auto memProperties = physicalDevice.getMemoryProperties();
+
+		for(uint32_t i = 0; i < memProperties.memoryTypeCount; i++){
+			if((typeFilter & (1 << i)) && 
+				(memProperties.memoryTypes[i].propertyFlags & properties) == properties){
+					return i;
+				}
+		}
+
+		throw std::runtime_error("Failed to find suitable memory type!");
+	}
+
+	std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
+		vk::DeviceSize size, 
+		vk::BufferUsageFlags usage, 
+		vk::MemoryPropertyFlags properties)
+	{
+		vk::BufferCreateInfo bufferInfo{
+			.size = size,
+			.usage = usage,
+			.sharingMode = vk::SharingMode::eExclusive
+		};
+
+		vk::raii::Buffer buffer = vk::raii::Buffer(device, bufferInfo);
+		auto memRequirements = buffer.getMemoryRequirements();
+		vk::MemoryAllocateInfo allocInfo{
+			.allocationSize = memRequirements.size,
+			.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
+		};
+		vk::raii::DeviceMemory bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+		buffer.bindMemory(*bufferMemory, 0);
+		return {std::move(buffer), std::move(bufferMemory)};
+	}
+
+	void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size)
+	{
+		vk::CommandBufferAllocateInfo allocInfo{
+			.commandPool = commandPool,
+			.level = vk::CommandBufferLevel::ePrimary, 
+			.commandBufferCount = 1
+		};
+		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+
+		commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+			commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+		commandCopyBuffer.end();
+
+		graphicsQueue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+		graphicsQueue.waitIdle();
+	}
 };
 
 int main()
